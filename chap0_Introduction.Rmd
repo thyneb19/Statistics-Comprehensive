@@ -1,0 +1,9 @@
+<!-- The {.unnumbered} option here means that the introduction will be "Chapter 0." -->
+
+#Introduction {.unnumbered}
+
+After using various statistical models in research and throughout my classes, I began being concerned with not only the predictive power of these models but also the interpretability of their results. Today many business make use of blackbox models in order to automate their large distributed systems; but with the ubiquitous use of these systems, the need to understand how they make predictions becomes even more necessary.
+
+One recent problem that got me interested in the subject of model interpretability was related to Youtube and their monetization of people’s videos. Youtube uses machine learning systems to automatically handle copyright claims made on videos and to decide whether or not a person's channel can run advertisements to make money. However due to the complexity of the models, there have been many instances where Youtube creators have had their videos prohibited from running advertisements without any clear reasoning. Due to the blackbox models being used, these creators are unable to understand the advertisement system and unknowingly make videos that do not meet Youtube’s standards. Methods such as shapley values can help improve transparency of similar automated systems and, in this case, would help identify what kinds of videos would meet proper advertising standards.
+
+In this report I aim to do the following: explain how shapley values can be calculated for single observations, explain how shapley values can be calculated more efficiently for datasets with many predictors using the IML package in R, apply these shapley values to better understand how a randomforest model predicts house prices.

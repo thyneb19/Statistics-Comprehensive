@@ -1,0 +1,268 @@
+<!--
+The {#rmd-basics} text after the chapter declaration will allow us to link throughout the document back to the beginning of Chapter 1.  These labels will automatically be generated (if not specified) by changing the spaces to hyphens and capital letters to lowercase.  Look for the reference to this label at the beginning of Chapter 2.
+-->
+---
+header-includes:
+- \usepackage{amssymb,amsthm,amsmath}
+- \usepackage{chemarr}
+output: pdf_document
+geometry: margin=3cm
+---
+
+#The Shapley Value
+
+```{r include = FALSE}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(iml)
+library(gridExtra)
+if(!require(acstats)){
+  library(devtools)
+  devtools::install_github("Amherst-Statistics/acstats")
+  }
+options(digits = 10)
+```
+
+##What is the Shapley Value
+
+The shapley value was originally a game theory concept used to answer the following question: in a group of players with varying skills who are working together for a collective payout, what is the fairest way to divide the payoff among the players? For shapley values' statistical application, we can think of the following terms in relation to our model and its features.
+
+* Players: feature values for an observation
+* Game: making a prediction for that observation
+* Payout: Actual prediction for that observation minus the average prediction for all instances
+* Coalition: combination of feature values for an observation not including the feature you are testing for
+
+Our overall goal is to explain the difference between an observation’s prediction and the average prediction for all other observations by calculating each feature value’s contribution to the prediction. Going back to its game theory roots, it is easy to understand the process of calculating marginal contribution. Let us say that all features are players and are working together in a room to make a prediction. Then the marginal contribution of one feature $i$ is the difference between the prediction made by the group of features already in the room and the prediction made when the feature $i$ joins. [@molnar_2019] 
+
+```{r include = FALSE}
+diamondData = read.csv("data/diamonds.csv")
+```
+
+To demonstrate how Shapley Values are calculated, we will make use of the diamond dataset (found here: https://www.kaggle.com/shivam2503/diamonds/version/1) which includes the following variables:
+
+* price: price of the diamond in US dollars
+* carat: weight of the diamond in carats
+* cut: quality of the diamond's cut with values fair, good, very good, premium, or ideal
+* color: diamond color which can be J, worst color; I; H; G; F; E; and D, best color
+* clarity: measure of how clear a diamond is; I1 worst clarity, SI1, SI2, VS1, VS2, VVS1, VVS2, IF best clarity
+* x: diamond length in millimeters
+* y: diamond width in millimeters
+* z: diamond depth in millimeters
+* depth: total depth percentage, which is calculated from x, y, and z
+* table: width of top of the diamond relative to widest point
+
+For this example we will predict the price of a diamond using its carat weight, clarity, length, width, and depth. We will only make use of these predictors to keep things simple, and we will also remove a few outliers in the dataset whose sizes to price relationship differ greatly from the rest of the dataset and those that have diamond dimensions of 0.
+
+```{r readDiamond, include = FALSE}
+diamondData = diamondData[-c(1, 3, 4, 6, 7)]
+diamondData$clarity = as.factor(diamondData$clarity)
+colnames(diamondData) = c("carat", "clarity", "price", "length", "width", "depth")
+diamondData = filter(diamondData, width != 0 & length != 0 & depth != 0 & width <= 20)
+
+#x, y, and z variables appear to have an exponential relationship with price, so we square root the price variable
+diamondData$transPrice = (diamondData$price)^(1/2)
+```
+
+When looking at the variable length's relationships with price in figure 1.1, we see a distinctly curved relationship. In order to better fit a linear model to the data we will transform the price variable by taking its square root.
+
+```{r, echo = FALSE}
+set.seed(1337)
+diamondlm = lm(transPrice ~ carat + clarity + length + width + depth, data = diamondData)
+```
+
+```{r, echo = FALSE, results = "asis"}
+label(path = "figure/dlengthNonTransPrice.png", caption = "Diamond Weight in Carats vs Price of the Diamond", 
+      label = "diamondLenVPrice", type = "figure",
+      scale = 1)
+```
+
+In figure 1.2 we see the relationship between diamond length and square root price. Across all diamond clarities, the price of a diamond tends to increases as length of the diamond increases. 
+
+```{r, echo = FALSE, results = "asis"}
+label(path = "figure/dlengthPrice.png", caption = "Diamond Length in millimeters vs Price of the Diamond", 
+      label = "diamondLenVSqrtPrice", type = "figure",
+      scale = 1)
+```
+
+In figure 1.3 we see the relationship between diamond width and square root price. Across all diamond clarities, the price of a diamond tends to increases as width of the diamond increases. 
+
+```{r, echo = FALSE, results = "asis"}
+label(path = "figure/dwidthPrice.png", caption = "Diamond Width in millimeters vs Price of the Diamond", 
+      label = "diamondWidthVSqrtPrice", type = "figure",
+      scale = 1)
+```
+
+In figure 1.4 we see the relationship between diamond depth and square root price. Across all diamond clarities, the price of a diamond tends to increases as depth of the diamond increases. 
+
+```{r, echo = FALSE, results = "asis"}
+label(path = "figure/ddepthVPrice.png", caption = "Diamond Depth in millimeters vs Price of the Diamond", 
+      label = "diamondDepthVSqrtPrice", type = "figure",
+      scale = 1)
+```
+
+In figure 1.5 we see the relationship between diamond weight in carats and square root price. Across all diamond clarities, the price of a diamond tends to increases as the weight of the diamond increases. 
+
+```{r, echo = FALSE, results = "asis"}
+label(path = "figure/dcaratVPrice.png", caption = "Diamond Weight in Carats vs Price of the Diamond", 
+      label = "diamondCaratVSqrtPrice", type = "figure",
+      scale = 1)
+```
+
+In each of the figures 1.1 through 1.5 we can also see how diamond prices tend to be distributed across the different clarity levels. According to the Gemological Institute of America, the different levels of clarity are as follows, in order from highest to lowest clarity:
+
+* IF
+* VVS1
+* VVS2
+* VS1
+* VS2
+* SI1
+* SI2
+* I1
+
+Diamonds of higher clarity are regarded as more valuable, and we can see this in the data. When we look specifically at the distribution of diamond prices among diamonds of similar size in figure 1.6, we can verify that diamonds of with greater clarity tend to have higher prices. Here we compare the prices of similar sized diamonds, ones below the $25\%$ quartile of length, width, and depth, because most large diamonds typically have worse clarity but their greater size raises their price to be more than that of smaller, higher clarity diamonds.
+
+
+```{r, echo = FALSE, results = "asis"}
+label(path = "figure/dclarityVPrice.png", caption = "Diamond Clarity vs Price of the Diamond", 
+      label = "diamondClarityVSqrtPrice", type = "figure",
+      scale = 1)
+```
+
+Now that we better understand how the different features of diamonds relate to their price, we can fit our model. We fit a multiple linear regression model to predict price using diamond weight in carats, width, length, depth and clarity. Looking at the model, we have an adjusted R-squared value of 0.945 and every predictor appears to be significant. We also see that the quantitative predictors carat, length, width, and depth all have positive coefficients. This matches our initial intuition that the larger the diamond the greater the price. For clarity, every clarity level has a positive coefficient and the magnitude of this coefficient is greater for the higher quality clarity levels. This also matches our intuition that higher clarity diamonds tend to demand a higher price. 
+
+```{r, echo = FALSE}
+set.seed(1337)
+summary(diamondlm)
+```
+
+After creating out model, we will pick an observation from the dataset and calculate shapley values for each of its feature values in order to explain the difference between that observation's prediction and the average prediction across the data. The average prediction for square root price on the diamond dataset is 55.775 and the first observation has a predicted square root price of 5.6199 The observation that we will examine has the following feature values:
+
+* carat = 0.23 carats
+* clarity = SI2
+* length = 3.95 millimeters
+* width = 3.98 millimeters
+* depth = 2.43 millimeters
+
+```{r, echo = FALSE, results = "asis"}
+label(path = "figure/observationValuesVsDataset.PNG", caption = "Single Observation's feature values Vs feature values across Diamond Dataset", 
+      label = "singleObsVsDataset", type = "figure",
+      scale = 0.4)
+```
+
+Comparing this diamond's feature values to the features' distribution across the dataset in figure 1.7, we see that the carat weight of 0.23 is below the 1st quartile of diamond weights, the length of 3.95 is below the 1st quartile of diamond lengths, the width of 3.98 is below the 1st quartile of diamond widths, the depth of 2.43 is below the 1st quartile of 2.91, and the clarity of SI2 is the second worst clarity level. Because the dimensions and weights of the diamond is quite low compared to the other diamonds and the clarity is of low quality, we would expect these features to lower to predicted price of the diamond. This is reflected by the fact that the predicted square root price 5.6199 is much lower than the average prediction across the dataset of 55.775. We can better quantify each feature's contribution to the prediction using shapley values. 
+
+##How to calculate Shapley Values for a single observation
+
+A shapley value explains a single feature value's contribution to the difference in prediction and average prediction. We calculate this contribution by taking the weighted average of the marginal contributions across all possible coalitions of features. Let us say we are interested in how the first observation's carat value of 0.23 contributes to the predicted square root price of 5.6199. To do this, we need to calculate a linear model trained on each coalition of predictor variables that includes carat, and a linear model trained on the same coalition but not including carat. We then take the difference between the predictions made by the carat including model and the model not including carat.[@molnar_2019] We then repeat this process for all other coalitions of variables. Just to clarify, a coalition is any combination of features. The coalitions including carat would then include the following:
+
+* carat
+* carat, clarity
+* carat, length
+* carat, width
+* carat, depth
+* carat, clarity, length
+* carat, clarity, width
+* ...
+
+The corresponding coalitions without carat would then be:
+
+* intercept only
+* clarity
+* length
+* width
+* depth
+* clarity, length
+* clarity, width
+* ...
+
+We will refer to the set of all coalitions including carat as $C$, and any subset of these including carat as $s$ and the subsets without carat as $s \backslash carat$. For each of these coalitions, we calculate a linear model with and without variable interaction terms referred to as $f_s(x)$ and $f_{s\backslash carat}(x)$. 
+
+For each coalition in $S$, we take the weighted sum of $f_s(x) - f_{s\backslash carat}(x)$. We will weight by the number of features in each coalition and the number of total features. The contribution $\phi_{carat}(f,x)$ is then the sum of all these weighted differences:
+
+$$\phi_{carat}(f,x) = \sum_{s \subseteq C} \frac{|s|!(M-|s|-1)!}{M!}[f_s(x) - f_{s \backslash carat}(x)]$$ [@lundberg2017unified]
+
+To calculate shapley values of my own, I created different models using all possible coalitions as predictor variables (code can be found in the appendix). Using this code, we can calculate the shapley values for each feature value of our diamond data observation.
+```{r, include = FALSE}
+diamondShapleyVals = readRDS("data/diamondDataShaps.rds")
+```
+
+For the observation mentioned at the end of section 1.1, the feature values are:
+
+* carat = 0.23 carats
+* clarity = SI2
+* length = 3.95 millimeters
+* width = 3.98 millimeters
+* depth = 2.43 millimeters
+
+We get the following shapley values for each feature. 
+
+* $\phi_{carat}$: -0.685
+* $\phi_{clarity}$: -0.672
+* $\phi_{length}$: -1.207
+* $\phi_{width}$: -1.162
+* $\phi_{depth}$: -1.108
+
+The negative shapley values suggest that each feature value for this observation lead to a lower predicted price compared to the average predicted price of the dataset. As mentioned at the end of section 1.1 we see that the feature values for this single observation, carat = 0.23, length = 3.95, width = 3.98, depth = 2.43, are quite low relative to the rest of the dataset. We would then intuitively expect this diamond to have a lower price due to its smaller weight, size, and poor clarity. The shapley values calculated here confirm this intuition. 
+
+##Calculating Shapley Values with IML Package
+
+As seen in the above example, calculating shapley values requires the creation of and use of many models. To predict diamond price, I used 5 predictor variables. Even with this low number of predictors, since we have to create models with and without interaction terms for all possible coalitions,  $2*2^5 = 64$ models had to be created. The number of models necessary to calculate shapley values increases exponentially the more predictor variables you have. 
+
+It is quite clear how calculating shapley values this way becomes impractical for datasets using even a moderate number of predictors. However, the IML package in R can help approximate shapley values without having to create multiple models.[@iml_Molnar] Instead of training a new model for each coalition of predictor variables, IML uses a single model to make predictions and simply replaces the values of features not in the coalition with a randomly chosen value from the dataset.[@molnar_2019]
+
+For example, take the same observation from the diamond package mentioned earlier and let us say we are trying to calculate the marginal contribution of its carat value with the coalition length, width, and clarity:
+
+* Actual Observation: carat = 0.23, clarity = SI2, length = 3.95, width = 3.98, depth = 2.43
+
+When we calculate the prediction for the coalition including carat, we would feed the following "observation" to the full model. 
+
+* carat = 0.23, clarity = SI2, length = 3.95, width = 3.98 
+
+Since the depth predictor is not in our coalition, we use a randomly sampled value from the dataset:
+
+* depth = 4.16
+
+The full "observation" we feed the model is then:
+
+* carat = 0.23, clarity = SI2, length = 3.95, width = 3.98 depth = 4.16
+
+We do the same process for the coalition without the variable of interest, using a carat value randomly sampled from the dataset of 0.58:
+
+* carat = 0.58, clarity = SI2, length = 3.95, width = 3.98 depth = 4.16
+
+We then use the MLR model created earlier to predict the square root prices of these observations, which are 4.5591 and 17.554. The weighted marginal contribution for carat in this coalition is then the difference of $4.5591-17.554=-12.995$. Since the contribution depends on randomly chosen values for features not in the coalition, this process is repeated and the average of these weighted marginal contributions becomes the final marginal contribution for this coalition. If the number of total coalitions is still too large to feasibly perform this calculation, this process can be made more efficient by randomly sampling from all possible coalitions and only calculating the marginal contribution of the feature of interest for these sampled coalitions.[@molnar_2019]
+
+##Properties of the Shapley Value
+
+The shapley value is the only method that can calculate a "fair payout" or appropriate marginal contributions. This is because the shapley value has the following properties
+
+* **Efficiency**: the feature contributions must add up to the difference in prediction and average prediction
+
+ $\sum_{j=1}^p\phi_j = \hat{f}(x)-E_X(\hat{f}(x))$
+
+* **Symmetry**: the contribution of two features should be the same if they contribute equally to all coalitions
+
+ let $f_{s}(x)-f_{s\backslash j}(x)$ and $f_{s}(x)-f_{s\backslash i}(x)$ be the marginal contributions of feature values j and i
+
+ if $f_{s}(x)-f_{s\backslash j}(x) = f_{s}(x)-f_{s\backslash i}(x)$  for all $s\subseteq coalitions$ 
+
+ then $\phi_j=\phi_i$
+
+* **Dummy**: a feature value that does change the predicted value has a shapley value of 0
+
+ if $f_{s}(x) = f_{s\backslash j}(x)$ for all $s\subseteq coalitions$
+
+ then $\phi_j = 0$
+
+* **Additivity**: if we had two different attribution problems involving the same features but different marginal contribution functions as follows:
+
+ $\phi_1$ and $\phi_2$
+ 
+We can then model the two problems into one problem such that the marginal contribution function is in the form:
+
+ $\phi_1 + \phi_2$
+
+The additivity property of shapley values is very helpful for ensemble models. For example, if we are working with a randomforest model, we could calculate the shapley values of each feature for each tree in the forest and then take the average to get the shapley value for the entire randomforest. [@lundberg2017unified] [@molnar_2019]
+
+These describe properties make shapley values the only explanation method that has a solid theoretical background. There are other methods such as local interpretable model-agnostic explanations (LIME) which do not guarantee a fair "payout" to each feature value and also does not have any theory as to why the method works. This makes shapley values the best tool to improve model prediction interpretability. [@molnar_2019]

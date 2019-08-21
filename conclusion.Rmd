@@ -1,0 +1,571 @@
+---
+output: pdf_document
+---
+
+# Conclusion {.unnumbered}
+  \setcounter{chapter}{3}
+	\setcounter{section}{0}
+
+In this project I have covered what shapley values are, how they can be calculated as well as approximated, and have shown how they can be used to understand a model's predictions. To do this, I created my own code to generate linear models trained on all possible groupings of predictor variables and used these models to calculate marginal contributions for the diamond dataset's predictors. I then took the weighted average of these marginal contributions to get an observation's shapley values. I also did a study making use of the IML package to understand what factors lead to higher and lower house prices in King's County, Washington. This study demonstrated the shapley values' ability to understand the factors that lead to an individual prediction, but also what values in general may be associated with certain factors. For example, the shapley values confirmed our intuition that factors, such as house size and whether or not the home has a view, correspond with a home having a greater selling price. 
+
+Because of their strong theoretical backing, ease of interpretation, and ability to match human intuition; shapley values are a great tool for improving readability of complex model predictions. Their application can help make machine learning systems more transparent and improve people's understandings of such systems. 
+
+<!--
+If you feel it necessary to include an appendix, it goes here.
+-->
+
+\appendix
+
+\singlespacing
+
+# Appendix
+
+#### In Chapter 1:
+
+In order to calculate my own shapley values I had to create code to automatically create all of the models I needed, as well as perform all of the calculations for marginal contribution. The code I created is replicated here. 
+
+```{r createGraphsDiamond, include = FALSE, eval = FALSE}
+p1 <- ggplot(diamondData, aes(x = width, y = price)) + geom_point()
+p2 <- ggplot(diamondData, aes(x = length, y = price)) + geom_point()
+p3 <- ggplot(diamondData, aes(x = depth, y = price)) + geom_point()
+diamondPlot = grid.arrange(p1, p2, p3, nrow = 2)
+ggsave("figure/diamondPlot.png", plot = diamondPlot, width = 5, height = 3)
+```
+
+```{r , eval = FALSE, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+diamondData = diamondData[-c(1, 3, 4, 6, 7)]
+diamondData$clarity = as.factor(diamondData$clarity)
+colnames(diamondData) = c("carat", "clarity", "price", "length", "width", "depth")
+diamondData = filter(diamondData, width != 0 & length != 0 & depth != 0 & width <= 20)
+
+#x, y, and z variables appear to have an exponential relationship with price, so we transformed the price variable
+diamondData$transPrice = (diamondData$price)^(1/4)
+```
+
+```{r, echo = FALSE, eval = FALSE}
+lengthNoTransPrice = ggplot(diamondData, aes(x = length, y = price, col = clarity)) + geom_point() + ggtitle(label = "Diamond Length vs Squareroot Price") 
+
+ggsave("figure/dlengthNonTransPrice.png", plot = lengthNoTransPrice, 
+       width = 5, height = 3)
+
+lengthVPrice = ggplot(diamondData, aes(x = length, y = transPrice, col = clarity)) + geom_point() + ggtitle(label = "Diamond Length vs Squareroot Price")
+
+widthVPrice = ggplot(diamondData, aes(x = width, y = transPrice, col = clarity)) + geom_point() + ggtitle(label = "Diamond Width vs Squareroot Price")
+
+depthVPrice = ggplot(diamondData, aes(x = depth, y = transPrice, col = clarity)) + geom_point() + ggtitle(label = "Diamond Depth vs Squareroot Price")
+
+caratVPrice = ggplot(diamondData, aes(x = carat, y = transPrice, col = clarity)) + geom_point() + ggtitle(label = "Diamond Weight in Carats vs Squareroot Price")
+
+ggsave("figure/dlengthPrice.png", plot = lengthVPrice, 
+       width = 5, height = 3)
+ggsave("figure/dwidthPrice.png", plot = widthVPrice, 
+       width = 5, height = 3)
+ggsave("figure/ddepthVPrice.png", plot = depthVPrice, 
+       width = 5, height = 3)
+ggsave("figure/dcaratVPrice.png", plot = caratVPrice, 
+       width = 5, height = 3)
+```
+
+
+```{r, echo = FALSE, eval = FALSE}
+clarityTransPrice = ggplot(diamondData %>% filter(width <= 4.7 & length <= 4.7 & depth <= 3), aes(x = clarity, y = price)) + geom_boxplot() + ggtitle(label = "Squareroot Price across Diamond Clarities")
+
+ggsave("figure/dclarityVPrice.png", plot = clarityTransPrice, 
+       width = 5, height = 3)
+```
+
+```{r , eval = FALSE, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+predictors = c("carat", "clarity", "length", "width", "depth")
+
+#creates linear regression models using all combinations of variables in predictors with and without a specified variable of interest
+#@param interestedVariable: your chosen variable of interest, this variable will not be included in half of the models
+#output: list of lists
+#       each list within the overall output contains 4 elements: model without variable of interest, number of predictors in that model, model with variable of interest, and number of predictors in that model
+getModels <- function(interestedVariable){
+  interestVar = interestedVariable
+  models = list()
+  
+  preds = predictors[!grepl(interestVar, predictors)]
+  noVarComb1 = combn(preds,1)
+  noVarComb2 = combn(preds,2)
+  noVarComb3 = combn(preds,3)
+  noVarComb4 = combn(preds,4)
+  
+  #create formulas with and without variable of interest
+  formulaWithVar = paste("transPrice~",interestVar, sep = "")
+  model = lm(transPrice~1, data = diamondData)
+  modelWithVar = lm(formulaWithVar, data = diamondData)
+  models[[length(models)+1]] = list(model, 0, modelWithVar, 1)
+  for(h in 1:ncol(noVarComb1)){
+    formula = paste(noVarComb1[,h], collapse = "+")
+    formulaWithVar = paste(interestVar, formula, sep = "+")
+    
+    formula = as.formula(paste("transPrice~",formula, sep = ""))
+    formulaWithVar = as.formula(paste("transPrice~", formulaWithVar, sep = ""))
+    
+    model = lm(formula, data = diamondData)
+    modelWithVar = lm(formulaWithVar, data = diamondData)
+    models[[length(models)+1]] = list(model, 1, modelWithVar, 2)
+  }
+  for(i in 1:ncol(noVarComb2)){
+    formula = paste(noVarComb2[,i], collapse = "+")
+    formulaWithVar = paste(interestVar, formula, sep = "+")
+    
+    formula = as.formula(paste("transPrice~",formula, sep = ""))
+    formulaWithVar = as.formula(paste("transPrice~", formulaWithVar, sep = ""))
+    
+    model = lm(formula, data = diamondData)
+    modelWithVar = lm(formulaWithVar, data = diamondData)
+    models[[length(models)+1]] = list(model, 2, modelWithVar, 3)
+  }
+  for(j in 1:ncol(noVarComb3)){
+    formula = paste(noVarComb3[,j], collapse = "+")
+    formulaWithVar = paste(interestVar, formula, sep = "+")
+    
+    formula = as.formula(paste("transPrice~",formula, sep = ""))
+    formulaWithVar = as.formula(paste("transPrice~", formulaWithVar, sep = ""))
+    
+    model = lm(formula, data = diamondData)
+    modelWithVar = lm(formulaWithVar, data = diamondData)
+    models[[length(models)+1]] = list(model, 3, modelWithVar, 4)
+  }
+ 
+  formula = paste(preds, collapse = "+")
+  formulaWithVar = paste(interestVar, formula, sep = "+")
+  
+  formula = as.formula(paste("transPrice~",formula, sep = ""))
+  formulaWithVar = as.formula(paste("transPrice~", formulaWithVar, sep = ""))
+  
+  model = lm(formula, data = diamondData)
+  modelWithVar = lm(formulaWithVar, data = diamondData)
+  models[[length(models)+1]] = list(model, 4, modelWithVar, 5)
+  return(models)
+}
+
+#creates all possible first order interaction formulas given a list of variable names
+#@param: list of predictor variables you want to create formulas with
+#output: a string that can be used within a formula that contains all first order interactions
+#example input: width, length, depth
+#example output: width*length + width*depth + length*depth
+createInteractionTerms <- function(predictorVars){
+  endLoop = length(predictorVars)
+  interactions = list()
+  
+  if(length(predictorVars) <= 1){
+    return(predictorVars[[1]])
+  }
+  for(i in 1:(endLoop-1)){
+    for(j in i:endLoop){
+      if(!grepl(predictorVars[[i]], predictorVars[[j]])){
+        interactions[[length(interactions)+1]] = paste(predictorVars[[i]], predictorVars[[j]], sep = "*")  
+      }
+    }
+  }
+  return(paste(interactions, collapse = "+"))
+}
+
+#creates interaction terms between a given variable and a list of other variables
+#@param interested: predictor variable you want to calculate shapley value for
+#@param otherVars: list of other predictor variables in the coalition
+#output: a string that can be used within a formula that contains all first order interactions between interested variable and other predictor variables 
+createInteractionInterested <- function(interested, otherVars){
+  endLoop = length(otherVars)
+  otherInteractions = createInteractionTerms(otherVars)
+  
+  interactions = list()
+  for(i in 1:endLoop){
+    interactions[[length(interactions)+1]] = paste(interested, otherVars[[i]], sep = "*")  
+  }
+  return(paste(paste(interactions, collapse = "+"),otherInteractions, sep = "+"))
+}
+
+#create all models containing all possible combinations of predictors' interaction terms
+#only uses first order interactions since higher order interactions are unlikely
+#@param interestedVariable: your chosen variable of interest, this variable will not be included in half of the models
+#output: list of lists
+#       each list within the overall output contains 4 elements: model without variable of interest, number of predictors in that model, model with variable of interest, and number of predictors in that model
+getInteractionModels <- function(interestedVariable){
+  interestVar = interestedVariable
+  models = list()
+  
+  preds = predictors[!grepl(interestVar, predictors)]
+  noVarComb1 = combn(preds,1)
+  noVarComb2 = combn(preds,2)
+  noVarComb3 = combn(preds,3)
+  noVarComb4 = combn(preds,4)
+  
+  #create formulas with and without variable of interest
+  for(i in 1:ncol(noVarComb1)){
+    formula = noVarComb1[,i]
+    formulaWithVar = createInteractionInterested(interestVar, noVarComb1[,i])
+    
+    formula = as.formula(paste("transPrice~",formula, sep = ""))
+    formulaWithVar = as.formula(paste("transPrice~", formulaWithVar, sep = ""))
+    
+    model = lm(formula, data = diamondData)
+    modelWithVar = lm(formulaWithVar, data = diamondData)
+    models[[length(models)+1]] = list(model, 1, modelWithVar, 2)
+  }
+  for(i in 1:ncol(noVarComb2)){
+    formula = createInteractionTerms(noVarComb2[,i])
+    formulaWithVar = createInteractionInterested(interestVar, noVarComb2[,i])
+    
+    formula = as.formula(paste("transPrice~",formula, sep = ""))
+    formulaWithVar = as.formula(paste("transPrice~", formulaWithVar, sep = ""))
+    
+    model = lm(formula, data = diamondData)
+    modelWithVar = lm(formulaWithVar, data = diamondData)
+    models[[length(models)+1]] = list(model, 2, modelWithVar, 3)
+  }
+  for(j in 1:ncol(noVarComb3)){
+    formula = createInteractionTerms(noVarComb2[,i])
+    formulaWithVar = createInteractionInterested(interestVar, noVarComb2[,i])
+    
+    formula = as.formula(paste("transPrice~",formula, sep = ""))
+    formulaWithVar = as.formula(paste("transPrice~", formulaWithVar, sep = ""))
+    
+    model = lm(formula, data = diamondData)
+    modelWithVar = lm(formulaWithVar, data = diamondData)
+    models[[length(models)+1]] = list(model, 3, modelWithVar, 4)
+  }
+  
+  formula = createInteractionTerms(noVarComb4)
+  formulaWithVar = createInteractionInterested(interestVar, noVarComb4)
+    
+  formula = as.formula(paste("transPrice~",formula, sep = ""))
+  formulaWithVar = as.formula(paste("transPrice~", formulaWithVar, sep = ""))
+    
+  model = lm(formula, data = diamondData)
+  modelWithVar = lm(formulaWithVar, data = diamondData)
+  models[[length(models)+1]] = list(model, 4, modelWithVar, 5)
+  return(models)
+}
+
+#create linear models from all possible coalitions with and without first order interaction effects
+#@param interestedVariable: variable you want to calculate shapley value for
+#output: list of lists
+#       each list within the overall output contains 4 elements: model without variable of interest, number of predictors in that model, model with variable of interest, and number of predictors in that model
+getAllShapModels <- function(interestedVariable){
+  noInteractionModels = getModels(interestedVariable)
+  models = getInteractionModels(interestedVariable)
+  
+  for(i in 1:length(models)){
+    models[[length(models)+1]] = noInteractionModels[[i]]
+  }
+  return(models)
+}
+```
+
+```{r , eval = FALSE, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+#code used to generate appropriate models 
+caratModels = getAllModels("carat")
+clarityModels = getAllModels("clarity")
+lengthModels = getAllModels("length")
+widthModels = getAllModels("width")
+depthModels = getAllModels("depth")
+
+#average transformed price of the dataset
+meanTransPrice = mean(diamondData$transPrice)
+
+#calculates shapley values for a given observation feature value (which feature value is specified in the models)
+#@param observation: observation you would like to calculate shapley values for
+#@param models: list of all models that will be used to calculate shapley values (use output of getAllModels() function)
+#output: shapley value for the given observation's feature value
+calculateShapley <- function(observation, models){
+  output = 0
+  for(i in 1:length(models)){
+    modelWithIntVar = models[[i]][[3]]
+    model = models[[i]][[1]]
+    
+    z = models[[i]][[2]]
+    M = 5
+    multiplier = factorial(z)*factorial(M-z-1)/factorial(M)
+    predWithIntVar = predict(modelWithIntVar, observation)
+    pred = predict(model, observation)
+    marginalContribution = multiplier*(predWithIntVar-pred)
+    output = output + marginalContribution
+  }
+  return(output)
+}
+
+```
+
+```{r , eval = FALSE, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+#code to calculate first observation's shapley values
+caratShapley = calculateShapley(diamondData[1,], caratModels)
+clarityShapley = calculateShapley(diamondData[1,], clarityModels)
+lengthShapley = calculateShapley(diamondData[1,], lengthModels)
+widthShapley = calculateShapley(diamondData[1,], widthModels)
+depthShapley = calculateShapley(diamondData[1,], depthModels)
+
+caratShapley
+clarityShapley
+lengthShapley
+widthShapley
+depthShapley
+```
+
+```{r, echo = FALSE}
+#creates graphs to compare single observation feature values to each feature's distribution
+#across the diamond dataset
+obsCarat = ggplot(diamondData, aes(x = carat)) + geom_density(fill = "blue", alpha = 0.2) +
+  geom_vline(xintercept = 0.23, col = "red") + scale_x_continuous(limits = c(0, 3)) +
+  ggtitle(label = "Observation Carat Weight vs Distribution of Diamond Carat Weights")
+ 
+obsLength = ggplot(diamondData, aes(x = length)) + geom_density(fill = "blue", alpha = 0.2) +
+  geom_vline(xintercept = 3.95, col = "red") +
+  ggtitle(label = "Observation Length vs Distribution of Diamond Lengths")
+
+obsWidth = ggplot(diamondData, aes(x = width)) + geom_density(fill = "blue", alpha = 0.2) +
+  geom_vline(xintercept = 3.98, col = "red") +
+  ggtitle(label = "Observation Width vs Distribution of Diamond Widths")
+
+obsDepth = ggplot(diamondData, aes(x = depth)) + geom_density(fill = "blue", alpha = 0.2) +
+  geom_vline(xintercept = 2.43, col = "red") + 
+  scale_x_continuous(limits = c(2,6)) +
+  ggtitle(label = "Observation Depth vs Distribution of Diamond Depths")
+
+grid.arrange(obsCarat, obsLength, obsWidth, obsDepth, nrow = 2)
+```
+
+#### In Chapter 2:
+
+```{r , eval = FALSE, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+#read in housing data
+data = read.csv("data/kc_house_data.csv")
+data$date = ymd_hms(data$date)
+data = data %>% mutate(year = year(date))
+data = data %>% mutate(age = year-yr_built)
+
+#convert appropriate variables into factors
+data$year = as.factor(data$year)
+data$yr_built = as.factor(data$yr_built)
+data$floors = as.factor(data$floors)
+data$waterfront = as.factor(data$waterfront)
+data$view = as.factor(data$view)
+data$condition = as.factor(data$condition)
+data$grade = as.factor(data$grade)
+
+#create categorical variable to tell if a house's price is greater than $650000 and if the house has been renovated
+data = data %>% mutate(priceCat = ifelse(price>650000, 1, 0), renovated = ifelse(yr_renovated == 0, 0, 1))
+data$renovated = as.factor(data$renovated)
+data$priceCat = as.factor(data$priceCat)
+```
+
+
+```{r, eval = FALSE, tidy=TRUE, tidy.opts=list(width.cutoff=20)}
+bedroomVPrice = ggplot(data, aes(x = bedrooms, y = price)) + geom_point() + 
+  scale_x_continuous(limits = c(0, 15)) +
+  ggtitle(label = "Number of Bedrooms vs Price Sold")
+
+bathroomVPrice = ggplot(data, aes(x = bathrooms, y = price)) + geom_point() + 
+  scale_x_continuous(limits = c(0, 10)) +
+  ggtitle(label = "Number of Bathrooms vs Price Sold")
+
+#had to remove outliers, but for the majority of homes the higher the 
+sqftlivingVPrice = ggplot(data, aes(x = sqft_living, y = price)) + geom_point() + 
+  scale_x_continuous(limits = c(0, 20000)) +
+  ggtitle(label = "Square Footage of Interior Living Space vs Price Sold")
+
+sqftLotVPrice = ggplot(data, aes(x = sqft_lot, y = price)) + geom_point() + 
+  scale_x_continuous(limits = c(0, 1000000)) +
+  ggtitle(label = "Square Footage of Land Space vs Price Sold")
+
+#in order to get a better look at the distribution of prices among houses with different floor counts,
+#treated floors as a categorical variable
+floorsVPrice = ggplot(data, aes(x = floors, y = price)) + geom_boxplot() + 
+  scale_y_continuous(limits = c(0, 1500000)) +
+  ggtitle(label = "Distribution of Price Sold across Houses with Different Number of Floors")
+  
+conditionVPrice = ggplot(data, aes(x = condition, y = price)) + geom_boxplot() + 
+  scale_y_continuous(limits = c(0, 1500000)) +
+  ggtitle(label = "Distribution of Price Sold across Houses with Different Condition Levels")
+  
+gradeVPrice = ggplot(data, aes(x = grade, y = price)) + geom_boxplot() + 
+  scale_y_continuous(limits = c(0, 1500000)) +
+  ggtitle(label = "Distribution of Price Sold across Houses with Different Grades")
+
+sqftaboveVPrice = ggplot(data, aes(x = sqft_above, y = price)) + geom_point() +
+  ggtitle(label = "Square footage of Living Space above Ground Level vs Price Sold")
+
+sqftbasementVPrice = ggplot(data, aes(x = sqft_basement, y = price)) + geom_point() +
+  ggtitle(label = "Square footage of Living Space above Below Level vs Price Sold")
+
+sqftliving15VPrice = ggplot(data, aes(x = sqft_living15, y = price)) + geom_point() +
+  ggtitle(label = "Square footage of Living Space of 15 neighbors vs Price Sold")
+
+sqftlot15VPrice = ggplot(data, aes(x = sqft_lot15, y = price)) + geom_point() +
+  ggtitle(label = "Square footage of Land Space of 15 neighbors vs Price Sold")
+
+yearSoldVPrice = ggplot(data, aes(x = year, y = price)) + geom_boxplot() + 
+  scale_y_continuous(limits = c(0, 1000000)) +
+  ggtitle(label = "Year Sold vs House Price")
+
+ageVPrice = ggplot(data, aes(x = age, y = price)) + geom_point() + 
+  ggtitle(label = "Age of House vs Price Sold")
+
+ageVPriceCat = ggplot(data, aes(x = priceCat, y = age)) + geom_boxplot() + 
+  ggtitle(label = "Distribution of Ages across Houses sold at <=$65000 and >$65000")
+
+renovatedVPrice = ggplot(data, aes(x = renovated, y = price)) + geom_boxplot() + 
+  scale_y_continuous(limits = c(0, 1250000)) +
+  ggtitle(label = "Distribution of Price Sold across Unrenovated and Renovated Homes")
+
+waterfrontVPrice = ggplot(data, aes(x = waterfront, y = price)) + geom_boxplot() +
+  ggtitle(label = "Distribution of Price Sold across Homes without and with Waterfront views")
+
+viewVPrice = ggplot(data, aes(x = view, y = price)) + geom_boxplot() +
+  ggtitle(label = "Distribution of Price Sold across View Levels") + 
+  scale_y_continuous(limits = c(0, 2500000))
+```
+
+```{r, eval = FALSE}
+roomsAndFloorsPlots = grid.arrange(bedroomVPrice, bathroomVPrice, floorsVPrice, nrow = 2)
+
+sqftVPrice = grid.arrange(sqftlivingVPrice, sqftLotVPrice, 
+                          sqftliving15VPrice, sqftlot15VPrice, 
+                          sqftaboveVPrice, sqftbasementVPrice,
+                          nrow = 3)
+
+catVPrice = grid.arrange(waterfrontVPrice, viewVPrice,
+                         conditionVPrice, gradeVPrice,
+                         renovatedVPrice,
+                         nrow = 3)
+
+timeVPrice = grid.arrange(yearSoldVPrice, ageVPrice, ageVPriceCat, nrow = 2)
+```
+
+```{r , eval = FALSE, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+#create plot to view distribution of expensive and less expensive homes by location
+ggplot(data, aes(x = long, y = lat, col = priceCat)) + geom_density_2d() +
+  ggtitle("latitude and longitude vs price category")
+```
+
+```{r , eval = FALSE, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+#create new variable out of latitude bound observed in the data
+data = data %>% mutate(latThresh = ifelse(lat>=47.5,1,0))
+data$latThresh = as.factor(data$latThresh)
+ggplot(data, aes(x = latThresh, y = price)) + geom_boxplot() +
+  scale_y_continuous(limits = c(0, 1000000)) +
+  ggtitle("latThresh vs house price")
+```
+
+```{r , eval = FALSE, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+#code to create randomforest model predicting whether or not a house's price is greater than $650000
+set.seed(1337)
+dataCleanedCat = data[,-match(c("id", "date", "zipcode", "yr_built", "yr_renovated", "price"), colnames(data))]
+dataCleanedCat$year = as.factor(dataCleanedCat$year)
+lowerPriceData = dataCleanedCat %>% dplyr::filter(priceCat == 0)
+higherPriceData = dataCleanedCat %>% dplyr::filter(priceCat == 1)
+
+#dealing with very unbalanced dataset, have to make sure to get enough of the less represented category in the trainingset
+trainLowerIndices = sample(nrow(lowerPriceData), 0.66*nrow(lowerPriceData))
+trainHigherIndices = sample(nrow(higherPriceData), 0.66*nrow(higherPriceData))
+
+trainLower = lowerPriceData[trainLowerIndices,]
+trainHigher = higherPriceData[trainHigherIndices,]
+testLower = lowerPriceData[-trainLowerIndices,]
+testHigher = higherPriceData[trainHigherIndices,]
+
+trainCat = rbind(trainLower, trainHigher)
+testCat = rbind(testLower, testHigher)
+
+control <- trainControl(method="repeatedcv", number=10, repeats=3, search = "grid")
+tunegrid = expand.grid(.mtry = c(1:17))
+rfCat = randomForest(priceCat ~., data = trainCat, method = "rf", tuneGrid = tunegrid, trControl = control)
+
+table(predict(rfCat, testCat), testCat$priceCat)
+mean(predict(rfCat, testCat) == testCat$priceCat)
+```
+
+```{r, echo = FALSE, eval = FALSE}
+data$waterfront = as.factor(data$waterfront)
+#generates shapley values for a single predictor
+X = data[,-match(c("id", "date", "price", "priceCat", "zipcode", "yr_built", "yr_renovated", "lat", "long"), colnames(data))]
+
+predictor = Predictor$new(rfCont, data = X, y = data$price)
+shap = Shapley$new(predictor, x.interest = X[1,])
+shap$explain(x.interest = X[1,])
+shap1plot = plot(shap, main = "Feature Value Contributions to Predicted House Price for A Single Observation")
+```
+
+```{r, include = FALSE}
+quantShapValues = read.csv("data/rfQuantShapValues.csv")
+catShapValues = read.csv("data/rfCatShapValues.csv")
+
+quantShapMag = quantShapValues %>% filter(feature != "price") %>% group_by(feature) %>% summarise(aveAbsShap = mean(abs(phi)))
+catShapMag = catShapValues %>% filter(feature != "priceCat") %>% group_by(feature) %>% summarise(aveAbsShap = mean(abs(phi)))
+
+t1 = as.data.frame(quantShapMag[order(quantShapMag$aveAbsShap, decreasing = TRUE),])
+t2 = as.data.frame(catShapMag[order(catShapMag$aveAbsShap, decreasing = TRUE),])
+
+shapValTable = kable(list(t1,t2))
+```
+
+```{r, echo = FALSE, eval = FALSE, results = "asis"}
+values = strsplit(as.character(quantShapValues$feature.value), "=")
+values2 = unlist(values)
+
+quantShapValues = quantShapValues %>% mutate(featVals = 0)
+for(i in 1:length(values2)){
+  if(i%%2 == 0){
+    quantShapValues$featVals[[i/2]] = values2[[i]]
+  }
+}
+
+quantShapValues$featVals = as.numeric(quantShapValues$featVals)
+quantShapValues = quantShapValues %>% mutate(posContrib = ifelse(phi<0, 0, 1))
+quantShapValues$positiveContr = as.factor(quantShapValues$posContrib)
+
+ggplot((quantShapValues %>% filter(feature == "sqft_living")), aes(x = featVals, fill = positiveContr, alpha = 0.2)) + geom_density() + ggtitle(label = "Distribution of sqftliving Values With Positive and Negative Contributions") + xlab("sqft_living")
+```
+
+```{r, eval = FALSE, echo = FALSE}
+#generates shapley values for categorical predictor model
+predictor = Predictor$new(rfCat, data = X, y = data$price)
+shap = Shapley$new(predictor, x.interest = X[1,])
+shap$explain(x.interest = X[1,])
+shap2plot = shap$plot()
+```
+
+```{r, eval = FALSE, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+#read in shapley value data and explore what feature values for sqft_living contribute to higher and lower costs
+priceFeatContr = readRDS("data/priceShaps.rds")
+priceFeatContr$featureVal = as.numeric(as.character(priceFeatContr$featureVal))
+
+priceFeatContr = priceFeatContr %>% mutate(positiveContr = ifelse(phi >= 0, 1, 0))
+
+sqft_livingNegContr = priceFeatContr %>% filter(feature == "sqft_living", positiveContr == 0)
+sqft_livingPosContr = priceFeatContr %>% filter(feature == "sqft_living", positiveContr == 1)
+
+#create plot of sqft living values for negative and positive shapley values
+contrp1 <- ggplot(sqft_livingNegContr, aes(x = featureVal)) + geom_histogram()+ 
+  ggtitle(label = "negative shapley value") +
+  xlab(label = "sqft_living")
+contrp2 <- ggplot(sqft_livingPosContr, aes(x = featureVal)) + geom_histogram()+ 
+  ggtitle(label = "positive shapley value") + 
+  xlab(label = "sqft_living")
+ggsave("figure/sqft_livingContr.png", grid.arrange(contrp1, contrp2, nrow = 1), width = 5, height = 3)
+```
+```{r, eval = FALSE, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+#read in shapley value data and explore what feature values for view contribute to higher and lower costs
+priceFeatContr = readRDS("data/priceShaps.rds")
+priceFeatContr$featureVal = as.numeric(as.character(priceFeatContr$featureVal))
+
+priceFeatContr = priceFeatContr %>% mutate(positiveContr = ifelse(phi >= 0, 1, 0))
+
+viewNegContr = priceFeatContr %>% filter(feature == "view", positiveContr == 0)
+viewNegContr$featureVal = as.factor(viewNegContr$featureVal)
+viewPosContr = priceFeatContr %>% filter(feature == "view", positiveContr == 1)
+viewPosContr$featureVal = as.factor(viewPosContr$featureVal)
+
+#create plot of view levels for negative and positive shapley values
+contrp1 <- ggplot(viewNegContr, aes(x = featureVal)) + geom_bar() + 
+  ggtitle(label = "Negative Shapley ") +
+  xlab(label = "view level")
+contrp2 <- ggplot(viewPosContr, aes(x = featureVal)) + geom_bar()+ 
+  ggtitle(label = "Positive Shapley ") + 
+  xlab(label = "view level")
+ggsave("figure/viewContr.png", grid.arrange(contrp1, contrp2, nrow = 1), width = 5, height = 3)
+```
+
