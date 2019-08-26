@@ -1,0 +1,350 @@
+---
+title: "Diamon Price Analysis"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(iml)
+options(digits = 10)
+```
+
+```{r}
+diamondData = read.csv("diamonds.csv")
+```
+
+
+To demonstrate how Shapley Values are calculated, we will make use of the diamond dataset and use the features carat, clarity, diamond width, diamond length, and diamond depth to predict the price of the diamond. We will only make use of these predictors to keep things simple and since these predictors do not have particularly strong linear relationships with diamond price. We will also remove a few outliers in the dataset.
+```{r}
+diamondData = diamondData[-c(1, 3, 4, 6, 7)]
+diamondData$clarity = as.factor(diamondData$clarity)
+colnames(diamondData) = c("carat", "clarity", "price", "length", "width", "depth")
+diamondData = filter(diamondData, width != 0 & length != 0 & depth != 0 & width <= 20)
+```
+
+When looking at predictor relationships with price, we do not see a linear relationship. Thus, we will also transform the price variable by taking its 4th root.
+```{r}
+ggplot(diamondData, aes(x = width, y = price)) + geom_point()
+ggplot(diamondData, aes(x = length, y = price)) + geom_point()
+ggplot(diamondData, aes(x = depth, y = price)) + geom_point()
+
+#x, y, and z variables appear to have an exponential relationship with price, so we transformed the price variable
+diamondData$transPrice = (diamondData$price)^(1/4)
+```
+
+
+```{r}
+predictors = c("carat", "clarity", "length", "width", "depth")
+
+#creates linear regression models using all combinations of variables in predictors with and without a specified variable of interest
+#@param interestedVariable: your chosen variable of interest, this variable will not be included in half of the models
+#output: list of lists
+#       each list within the overall output contains 4 elements: model without variable of interest, number of predictors in that model
+#       model with variable of interest, number of predictors in that model
+getModels <- function(interestedVariable){
+  interestVar = interestedVariable
+  models = list()
+  
+  preds = predictors[!grepl(interestVar, predictors)]
+  noVarComb1 = combn(preds,1)
+  noVarComb2 = combn(preds,2)
+  noVarComb3 = combn(preds,3)
+  noVarComb4 = combn(preds,4)
+  
+  #create formulas with and without variable of interest
+  formulaWithVar = paste("transPrice~",interestVar, sep = "")
+  model = lm(transPrice~1, data = diamondData)
+  modelWithVar = lm(formulaWithVar, data = diamondData)
+  models[[length(models)+1]] = list(model, 0, modelWithVar, 1)
+  for(h in 1:ncol(noVarComb1)){
+    formula = paste(noVarComb1[,h], collapse = "+")
+    formulaWithVar = paste(interestVar, formula, sep = "+")
+    
+    formula = as.formula(paste("transPrice~",formula, sep = ""))
+    formulaWithVar = as.formula(paste("transPrice~", formulaWithVar, sep = ""))
+    
+    model = lm(formula, data = diamondData)
+    modelWithVar = lm(formulaWithVar, data = diamondData)
+    models[[length(models)+1]] = list(model, 1, modelWithVar, 2)
+  }
+  for(i in 1:ncol(noVarComb2)){
+    formula = paste(noVarComb2[,i], collapse = "+")
+    formulaWithVar = paste(interestVar, formula, sep = "+")
+    
+    formula = as.formula(paste("transPrice~",formula, sep = ""))
+    formulaWithVar = as.formula(paste("transPrice~", formulaWithVar, sep = ""))
+    
+    model = lm(formula, data = diamondData)
+    modelWithVar = lm(formulaWithVar, data = diamondData)
+    models[[length(models)+1]] = list(model, 2, modelWithVar, 3)
+  }
+  for(j in 1:ncol(noVarComb3)){
+    formula = paste(noVarComb3[,j], collapse = "+")
+    formulaWithVar = paste(interestVar, formula, sep = "+")
+    
+    formula = as.formula(paste("transPrice~",formula, sep = ""))
+    formulaWithVar = as.formula(paste("transPrice~", formulaWithVar, sep = ""))
+    
+    model = lm(formula, data = diamondData)
+    modelWithVar = lm(formulaWithVar, data = diamondData)
+    models[[length(models)+1]] = list(model, 3, modelWithVar, 4)
+  }
+ 
+  formula = paste(preds, collapse = "+")
+  formulaWithVar = paste(interestVar, formula, sep = "+")
+  
+  formula = as.formula(paste("transPrice~",formula, sep = ""))
+  formulaWithVar = as.formula(paste("transPrice~", formulaWithVar, sep = ""))
+  
+  model = lm(formula, data = diamondData)
+  modelWithVar = lm(formulaWithVar, data = diamondData)
+  models[[length(models)+1]] = list(model, 4, modelWithVar, 5)
+  return(models)
+}
+
+#creates all possible combinations of interaction terms given a list of variable names
+createInteractionTerms <- function(predictorVars){
+  endLoop = length(predictorVars)
+  interactions = list()
+  
+  if(length(predictorVars) <= 1){
+    return(predictorVars[[1]])
+  }
+  for(i in 1:(endLoop-1)){
+    for(j in i:endLoop){
+      if(!grepl(predictorVars[[i]], predictorVars[[j]])){
+        interactions[[length(interactions)+1]] = paste(predictorVars[[i]], predictorVars[[j]], sep = "*")  
+      }
+    }
+  }
+  return(paste(interactions, collapse = "+"))
+}
+
+#creates interaction terms between a given variable and a list of other variables
+createInteractionInterested <- function(interested, otherVars){
+  endLoop = length(otherVars)
+  otherInteractions = createInteractionTerms(otherVars)
+  
+  interactions = list()
+  for(i in 1:endLoop){
+    interactions[[length(interactions)+1]] = paste(interested, otherVars[[i]], sep = "*")  
+  }
+  return(paste(paste(interactions, collapse = "+"),otherInteractions, sep = "+"))
+}
+
+#create all models containing combination of predictors' interaction terms
+getInteractionModels <- function(interestedVariable){
+  interestVar = interestedVariable
+  models = list()
+  
+  preds = predictors[!grepl(interestVar, predictors)]
+  noVarComb1 = combn(preds,1)
+  noVarComb2 = combn(preds,2)
+  noVarComb3 = combn(preds,3)
+  noVarComb4 = combn(preds,4)
+  
+  #create formulas with and without variable of interest
+  for(i in 1:ncol(noVarComb1)){
+    formula = noVarComb1[,i]
+    formulaWithVar = createInteractionInterested(interestVar, noVarComb1[,i])
+    
+    formula = as.formula(paste("transPrice~",formula, sep = ""))
+    formulaWithVar = as.formula(paste("transPrice~", formulaWithVar, sep = ""))
+    
+    model = lm(formula, data = diamondData)
+    modelWithVar = lm(formulaWithVar, data = diamondData)
+    models[[length(models)+1]] = list(model, 1, modelWithVar, 2)
+  }
+  for(i in 1:ncol(noVarComb2)){
+    formula = createInteractionTerms(noVarComb2[,i])
+    formulaWithVar = createInteractionInterested(interestVar, noVarComb2[,i])
+    
+    formula = as.formula(paste("transPrice~",formula, sep = ""))
+    formulaWithVar = as.formula(paste("transPrice~", formulaWithVar, sep = ""))
+    
+    model = lm(formula, data = diamondData)
+    modelWithVar = lm(formulaWithVar, data = diamondData)
+    models[[length(models)+1]] = list(model, 2, modelWithVar, 3)
+  }
+  for(j in 1:ncol(noVarComb3)){
+    formula = createInteractionTerms(noVarComb2[,i])
+    formulaWithVar = createInteractionInterested(interestVar, noVarComb2[,i])
+    
+    formula = as.formula(paste("transPrice~",formula, sep = ""))
+    formulaWithVar = as.formula(paste("transPrice~", formulaWithVar, sep = ""))
+    
+    model = lm(formula, data = diamondData)
+    modelWithVar = lm(formulaWithVar, data = diamondData)
+    models[[length(models)+1]] = list(model, 3, modelWithVar, 4)
+  }
+  
+  formula = createInteractionTerms(noVarComb4)
+  formulaWithVar = createInteractionInterested(interestVar, noVarComb4)
+    
+  formula = as.formula(paste("transPrice~",formula, sep = ""))
+  formulaWithVar = as.formula(paste("transPrice~", formulaWithVar, sep = ""))
+    
+  model = lm(formula, data = diamondData)
+  modelWithVar = lm(formulaWithVar, data = diamondData)
+  models[[length(models)+1]] = list(model, 4, modelWithVar, 5)
+  return(models)
+}
+
+getAllModels <- function(interestedVariable){
+  noInteractionModels = getModels(interestedVariable)
+  models = getInteractionModels(interestedVariable)
+  
+  for(i in 1:length(models)){
+    models[[length(models)+1]] = noInteractionModels[[i]]
+  }
+  return(models)
+}
+```
+
+```{r}
+caratModels = getAllModels("carat")
+clarityModels = getAllModels("clarity")
+lengthModels = getAllModels("length")
+widthModels = getAllModels("width")
+depthModels = getAllModels("depth")
+
+meanTransPrice = mean(diamondData$transPrice)
+#calculates shapley values
+calculateShapley <- function(observation, models){
+  output = 0
+  for(i in 1:length(models)){
+    modelWithIntVar = models[[i]][[3]]
+    model = models[[i]][[1]]
+    
+    z = models[[i]][[2]]
+    M = 5
+    multiplier = factorial(z)*factorial(M-z-1)/factorial(M)
+    predWithIntVar = predict(modelWithIntVar, observation)
+    pred = predict(model, observation)
+    marginalContribution = multiplier*(predWithIntVar-pred)
+    output = output + marginalContribution
+  }
+  return(output)
+}
+
+calculateShapleyAve <- function(observation, models){
+  output = 0
+  for(i in 1:length(models)){
+    modelWithIntVar = models[[i]][[3]]
+    model = models[[i]][[1]]
+
+    predWithIntVar = predict(modelWithIntVar, observation)
+    pred = predict(model, observation)
+    marginalContribution = (predWithIntVar-pred)
+    output = output + marginalContribution
+  }
+  return(output/length(models))
+}
+```
+
+```{r}
+caratShapley = calculateShapley(diamondData[2,], caratModels)
+clarityShapley = calculateShapley(diamondData[2,], clarityModels)
+lengthShapley = calculateShapley(diamondData[2,], lengthModels)
+widthShapley = calculateShapley(diamondData[2,], widthModels)
+depthShapley = calculateShapley(diamondData[2,], depthModels)
+
+caratShapley
+clarityShapley
+lengthShapley
+widthShapley
+depthShapley
+
+fullInteractionModFormula = paste("transPrice~",createInteractionTerms(predictors), sep = "")
+fullModInt = lm(fullInteractionModFormula, data = diamondData)
+fullMod = lm(transPrice~carat+clarity+length+width+depth, data = diamondData)
+```
+
+Testing out shapley calculations using both models without interaction and models with interaction
+```{r}
+diamondShaps = list()
+numRows = as.integer(nrow(diamondData)/100)
+for(i in 1:numRows){
+  caratShap = calculateShapley(diamondData[i,], caratModels)
+  clarityShap = calculateShapley(diamondData[i,], clarityModels)
+  lengthShap = calculateShapley(diamondData[i,], lengthModels)
+  widthShap = calculateShapley(diamondData[i,], widthModels)
+  depthShap = calculateShapley(diamondData[i,], depthModels)
+  
+  df = data.frame(caratShap, clarityShap, lengthShap, widthShap, depthShap)
+  diamondShaps[[length(diamondShaps)+1]] = df
+}
+
+d = bind_rows(diamondShaps, .id = "column_label")
+d2 = diamondData[1:539,]
+d$transPrice = d2$transPrice
+d$avetransPrice = mean(predict(fullMod, diamondData[1:539,]))
+
+sumShaps = list()
+for(i in 1:nrow(d)){
+  sumShaps[[length(sumShaps)+1]] = data.frame(sumShap = d[i,]$caratShap + d[i,]$clarityShap + d[i,]$lengthShap + d[i,]$widthShap + d[i,]$depthShap)
+}
+sumShaps = bind_rows(sumShaps)
+
+d$sumOfShap = sumShaps[[1]]
+d$sumOfShap = as.double(d$sumOfShap)
+d$diffActMean = d$transPrice-d$avetransPrice
+```
+
+DON'T NEED THIS STUFF
+Testing out shapley calculations using models with interactions
+```{r}
+caratIntModels = getInteractionModels("carat")
+clarityIntModels = getInteractionModels("clarity")
+lengthIntModels = getInteractionModels("length")
+widthIntModels = getInteractionModels("width")
+depthIntModels = getInteractionModels("depth")
+
+diamondIntShaps = list()
+numRows = as.integer(nrow(diamondData)/100)
+for(i in 1:numRows){
+  caratIntShap = calculateShapley(diamondData[i,], caratIntModels)
+  clarityIntShap = calculateShapley(diamondData[i,], clarityIntModels)
+  lengthIntShap = calculateShapley(diamondData[i,], lengthIntModels)
+  widthIntShap = calculateShapley(diamondData[i,], widthIntModels)
+  depthIntShap = calculateShapley(diamondData[i,], depthIntModels)
+  
+  df = data.frame(caratIntShap, clarityIntShap, lengthIntShap, widthIntShap, depthIntShap)
+  diamondIntShaps[[length(diamondIntShaps)+1]] = df
+}
+
+dInt = bind_rows(diamondIntShaps, .id = "column_label")
+d2 = diamondData[1:539,]
+dInt$transPrice = d2$transPrice
+dInt$avetransPrice = mean(predict(fullMod, diamondData[1:539,]))
+
+sumShaps = list()
+for(i in 1:nrow(dInt)){
+  sumShaps[[length(sumShaps)+1]] = data.frame(sumShap = dInt[i,]$caratIntShap + dInt[i,]$clarityIntShap + dInt[i,]$lengthIntShap + dInt[i,]$widthIntShap + dInt[i,]$depthIntShap)
+}
+sumShaps = bind_rows(sumShaps)
+
+dInt$sumOfShap = sumShaps[[1]]
+dInt$sumOfShap = as.double(dInt$sumOfShap)
+dInt$diffActMean = dInt$transPrice-dInt$avetransPrice
+```
+
+
+```{r}
+X = diamondData[which(names(diamondData) != "transPrice") & which(names(diamondData) != "price")]
+predictor = Predictor$new(fullMod, data = X, y = diamondData$transPrice)
+```
+
+```{r}
+shap1 = Shapley$new(predictor, x.interest = X[1,])
+shap1$plot()
+shap1$results
+```
+
